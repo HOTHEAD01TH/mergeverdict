@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mergeverdict</title>
+<style>
+  :root {
+    --bg: #10141a; --panel: #181e27; --panel-2: #12171f; --line: #2c3644;
+    --text: #e8eef7; --muted: #9aa8bc; --accent: #c9b6ff; --ok: #3dd68c; --warn: #f0b429; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  header, main { width: min(900px, calc(100% - 32px)); margin: 0 auto; }
+  header { padding: 28px 0 8px; display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; }
+  h1 { margin: 0; font-size: 32px; letter-spacing: -0.03em; }
+  .kicker { color: var(--accent); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; margin: 0 0 6px; }
+  .lede, .meta { color: var(--muted); }
+  .mode { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .warnbox { border: 1px solid #5a4630; background: #2a2418; color: var(--warn); border-radius: 12px; padding: 10px 12px; margin: 14px 0; }
+  textarea, button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+  textarea { width: 100%; min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  button { background: var(--accent); color: #140f22; border: 0; font-weight: 650; cursor: pointer; margin: 12px 0 18px; }
+  button:disabled { opacity: 0.6; cursor: wait; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 32px; }
+  .verdict { font-size: 22px; font-weight: 750; margin: 0 0 6px; }
+  .merge { color: var(--ok); }
+  .hold { color: var(--warn); }
+  .revert { color: var(--bad); }
+  pre { margin: 10px 0 0; background: #0c1016; border-radius: 10px; padding: 8px 0; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.4; }
+  .line { display: block; padding: 0 12px; white-space: pre; }
+  .line.hit { background: #3a2f12; box-shadow: inset 3px 0 0 var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="kicker">diff opinion</p>
+    <h1>mergeverdict</h1>
+    <p class="lede">Paste a unified diff. Laya chooses merge, hold, or revert. Low confidence is hold. The quote is a line copied from the diff. If that line is not in the diff, the verdict is not shown.</p>
+  </div>
+  <div class="mode" id="mode" role="status">Laya not running</div>
+</header>
+<main>
+  <p class="warnbox">This does not merge. It never calls GitHub. A human still merges.</p>
+  <form id="form">
+    <textarea id="diff" spellcheck="false"></textarea>
+    <button type="submit">Ask for a verdict</button>
+  </form>
+  <section id="out" class="card" hidden></section>
+</main>
+<script>
+const SAMPLE = [
+  "diff --git a/src/billing.ts b/src/billing.ts",
+  "--- a/src/billing.ts",
+  "+++ b/src/billing.ts",
+  "@@ -3,6 +3,9 @@ export function total(cents: number) {",
+  " export function total(cents: number) {",
+  "-  return cents / 100;",
+  "+  if (cents < 0) {",
+  "+    throw new Error(\"negative cents\");",
+  "+  }",
+  "+  return cents / 100;",
+  " }",
+].join("\n");
+
+const diffEl = document.querySelector("#diff");
+const form = document.querySelector("#form");
+const out = document.querySelector("#out");
+const mode = document.querySelector("#mode");
+const DOWN = "Laya not running";
+diffEl.value = SAMPLE;
+
+function withhold(message) {
+  out.hidden = false;
+  out.replaceChildren();
+  const p = document.createElement("p");
+  p.textContent = message;
+  out.append(p);
+}
+
+function render(v) {
+  const lines = String(v && v.diff || "").split(/\r?\n/);
+  const allowed = v && (v.verdict === "merge" || v.verdict === "hold" || v.verdict === "revert");
+  if (!allowed || typeof v.quoteLine !== "string" || !lines.includes(v.quoteLine)) {
+    withhold("Verdict hidden because the quoted line is not in the diff.");
+    return;
+  }
+  out.hidden = false;
+  out.replaceChildren();
+  const title = document.createElement("p");
+  title.className = "verdict " + v.verdict;
+  title.textContent = v.verdict;
+  const note = document.createElement("p");
+  note.className = "warnbox";
+  note.textContent = "This does not merge. A human still merges.";
+  const meta = document.createElement("p");
+  meta.className = "meta";
+  const bits = [v.model || "laya"];
+  if (v.abstained) bits.push("abstain");
+  if (typeof v.confidence === "number") bits.push("confidence " + Number(v.confidence).toFixed(2));
+  bits.push("github " + String(v.github));
+  meta.textContent = bits.join(" · ");
+  const quote = document.createElement("p");
+  quote.textContent = v.quoteLine;
+  const pre = document.createElement("pre");
+  lines.forEach((line) => {
+    const span = document.createElement("span");
+    span.className = "line" + (line === v.quoteLine ? " hit" : "");
+    span.textContent = line === "" ? " " : line;
+    pre.append(span);
+  });
+  out.append(title, note, meta, quote, pre);
+}
+
+async function checkHealth() {
+  try {
+    const res = await fetch("/api/health");
+    mode.textContent = res.ok ? "laya ready" : DOWN;
+  } catch {
+    mode.textContent = DOWN;
+  }
+}
+
+form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const button = form.querySelector("button");
+  button.disabled = true;
+  mode.textContent = "loading model";
+  try {
+    const res = await fetch("/api/verdict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ diff: diffEl.value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      mode.textContent = data.error === DOWN || res.status === 503 ? DOWN : (data.error || DOWN);
+      out.hidden = true;
+      return;
+    }
+    mode.textContent = "laya";
+    render(data.verdict);
+  } catch {
+    mode.textContent = DOWN;
+    out.hidden = true;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+checkHealth();
+</script>
+</body>
+</html>
